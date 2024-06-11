@@ -1,0 +1,767 @@
+---
+title: "Exploring Health and Food Influences of Walkability"
+author:
+- Madison Clancy
+- Temi Kassim
+- Megan Klein
+date: 'Spring 2024'
+output:
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	fig.height = 4,
+	fig.width = 8
+)
+if(!require('pacman')) {
+  install.packages('pacman')
+}
+pacman::p_load(glmnet, car, tidyverse, pROC, caret, data.table, ggplot2, mapview, sf, ggResidpanel, bestglm, ggmap,readr, webshot)
+
+
+#install.packages("webshot")
+#webshot::install_phantomjs(force = TRUE)
+
+
+```
+
+\pagebreak
+
+
+# Overview and Goal of Study
+
+The goal of this study is to investigate the question, “Does accessibility to food and healthcare connect to an area’s walkability index and what can be improved?”
+
+
+We were particularly interested in this question as Chicago is a neighboring city to South Bend that many of us plan to move to in the following years. We were curious about how location affects a person's access to healthcare and food, directly impacting their lifestyle. We wanted to look further into the relationship between areas with food insecurity and their accessibility to healthcare to get a deeper understanding of how walkability may play a role.
+
+
+# Data Description
+## National Walkability Index
+
+The main dataset is from the EPA Smart Location Database, version 3, dated January 2021, comprises a collection of variables aimed at assessing locations based on urban transportation factors. It covers a wide range of data points across 220,740 entries, each of which represent different geographic areas within the US. There are 117 columns, and these include both numerical and categorical data types. We narrowed down this data to relevant variables that relate to food and healthcare.  We also combined three other datasets "US_FIPS_Codes.csv", "Chicago Health Atlas Data" and "Chicago_CensusTracts2010" data to help us answer our question. Finally, after data cleaning and manipulation, we were left with 38 columns and 2,185 rows.
+
+The Data Dictionary can be referenced here: https://docs.google.com/document/d/1nbo9Qp6IDW9rJSgrV38W-hXUsyy8n0B_uqH1spD7PpA/edit?usp=sharing
+
+
+Key Aspects:
+The EKW_2022 and NatWalkInd variables provide a summary score reflecting the walkability and pedestrian-friendliness of an area. Thus, these metrics are a crucial component of smart urban planning.
+
+Quick Look Into Some Key Variables: 
+
+The dataset includes geographic identifiers like GEOID10, STATEFP, COUNTYFP, and TRACTCE, which are crucial for mapping and spatial analysis. Columns like CSA and CSA_Name (Combined Statistical Area) and CBSA (Core Based Statistical Area) provide insights into the urban or rural classification of regions, critical for understanding the spatial context of the data. Indicators like D2A_Ranked, D2B_Ranked, D3B_Ranked, and D4A_Ranked offer ranked assessments of the areas based on specific criteria, aiding in comparative analyses across different regions.
+
+
+
+# Exploratory Data Analysis (EDA)
+
+```{r, results = "hide"}
+#Read in data (Run Appendix below if Cleaned File not created):
+data_cities <- read.csv("~/humananalytics/final_project/ChicagoWalkability.csv", header = TRUE )
+
+data_cities
+
+```
+
+
+
+First, we took a quick look at the distribution of the National Walkability Index in 2022 and found the min to be 6.75 while the max was 19.67. The scale of the National Walkability Index ranges from 0 to 20, with 20 being most walkable.
+
+```{r}
+summary(data_cities$EKW_2022)
+
+```
+
+
+Lets look at the relationship between Healthcare and the National Walkability Index (EKW_2022), specifically the rate of those who are uninsured (UNS_2018.2022). 
+
+```{r, warning= FALSE}
+data_cities %>%
+  ggplot(aes(x = EKW_2022, y = UNS_2018.2022,color = EKW_2022 )) +
+  geom_point()  +
+  geom_smooth(method = "lm") +
+  labs(title = "Uninsured Rate (% of residents) versus Walkability Index ", x= "Walkability Index, 2022", y = "Uninsured rate (% of residents)")
+
+```
+We see that the graph tells us that there is a slight negative linear relationship between the two. This indicates that as the walkability index increases the uninsured rate of residents decreases, suggesting that there are less people uninsured in highly walkable areas. 
+
+Next lets look at the Medicaid Coverage Rate against the National Walkability Index:
+```{r, warning=FALSE}
+data_cities %>%
+  ggplot(aes(x= EKW_2022, y = MCD_2018.2022, color =EKW_2022)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(x = "Walkability Index, 2022", y = "Medicaid coverage (% of residents)", title = "Medicaid coverage (% of residents) versus Walkability Index")
+
+```
+Here there appears to be a clear negative linear relationship. This suggests that as the walkability of an area increases, the rate of individuals that are covered by medicaid decreases, suggesting that there are less people covered by medicaid in highly walkable areas. 
+
+Next Food Insecurity Rate versus the National Walkability Index:
+```{r, warning=FALSE}
+data_cities %>%
+  ggplot(aes(x = EKW_2022, y = FAI_2020)) + geom_point() + geom_smooth(method = "lm") + labs(title = "Food Insecurity and Walkability Index", x = "Walkability Index, 2022", y = "Food insecurity (% of residents), 2020")
+```
+
+There also appears to be a negative linear relationship. Again suggesting that as areas become more walkable, the rate of food insecurity decreases.
+
+
+Next, lets view the distribution of the National Walkability Index in 2022 based on counties, notice that there are only two counties (Cook and DuPage) available. This may be interesting to research as we see the counties have slightly different linear relationships to the percent of low wage workers.
+
+```{r, warning = FALSE}
+data_cities %>% 
+  ggplot(aes(x=County_Name, y=EKW_2022, group = County_Name, color = County_Name)) +
+  geom_boxplot() +
+  labs(title = "National Walkability Index Based On County", y = "National Walkability Index (2022)", x = "County Name")
+
+```
+
+```{r echo=FALSE}
+
+data_cities %>%
+  group_by(County_Name) %>%
+  summarize(n())
+
+```
+
+Looking into the differences between counties could prove interesting in understanding factors and interactions that impact walkability. Based on the pivot table, it is clear that we have a biased amount of data favoring Cook county, so further analysis may not be possible. This may be a limitation later as DuPage may not be accurately represented by our findings.
+
+Lets look at variables' relationship with the old National Walkability Index Variable (NatWalkInd):
+
+Walkability Per Street Intersection Density Rankings (D3B_Ranked) Compared to National Walkability Index (NatWalkInd and EKW_2022) :
+
+```{r}
+#Walkability per Street Intersection Density Rankings (D3B_Ranked):
+
+data_cities %>%
+  ggplot(aes(x= D3B_Ranked, y = NatWalkInd, group = D3B_Ranked, fill = D3B_Ranked))+
+  geom_boxplot() +
+  theme_classic() +
+  labs(x = "Street Intersection Density Ranking" )
+```
+
+```{r, warning = FALSE}
+
+data_cities %>%
+  ggplot(aes(x= D3B_Ranked, y = EKW_2022, group = D3B_Ranked, fill = D3B_Ranked))+
+  geom_boxplot() +
+  theme_classic() +
+  labs(x = "Street Intersection Density Ranking" )
+```
+
+These boxplots visualize the relationship between street intersection density and our original NatWalkInd variable as well as our chosen one , EKW_2022. Each box represents the IQR of the NavWalkInd/EKW_2022 for a specific street intersection density rank. The color gradient from lighter to darker shades as the density ranking increases indicate higher values of rankings.
+
+These plots show  a pretty strong correlation between the complexity of street intersections and walkability, suggesting that as street intersections become more densely ranked, the variation and median values of the walkability index might change.
+
+By choosing EKW_2022 vs NatWalkInd, it shows that these metrics are essentially the same, but there could be some colineariaty between the two variables, intuitively because they are measuring the same thing but come from different sources. This may pose issues in the future when modeling.
+
+Further, Let's compare the spreads of the National Walkability Index (EKW_2022 and NatWalkInd):
+```{r}
+summary(data_cities$NatWalkInd)
+
+
+summary(data_cities$EKW_2022)
+
+
+```
+
+
+They have pretty similar spreads with the same mean! They are both ranked 0-20,but have sight differences throughout.
+
+
+
+# Testing Logisitic Regression with National Walkability (NatWalkInd)
+
+Before determining if we should use EKW_2022 or NatWalkInd, we wanted to research if the variables suggested in the data guide, used to compose NatWalkInd, would show up as the only contributors to NatWalkInd. 
+
+We decided the best way to research this was running a simple logistic regression against NatWalkInd, dividing the binary categories into high walkability =1 (>mean) and low walkability = 0 (<mean).
+
+We removed all variables that were not predictive and changed numeric variables into the numeric data type in order to run our logistic regression model.
+```{r, results = 'hide'}
+
+
+#converting to numeric data type and prepping
+data_cities_lm <- data_cities %>% select(everything(), - NEWGEOID10, -State, -County_Name, - OBJECTID, - STATEFP, -COUNTYFP, - TRACTCE) %>%
+  mutate(TRV_2018.2022 = as.numeric(TRV_2018.2022), FAI_2020 = as.numeric(FAI_2020), VHA_2018.2022 = as.numeric( VHA_2018.2022), MCD_2018.2022 = as.numeric(MCD_2018.2022), UNS_2018.2022 = as.numeric(UNS_2018.2022), EMP_2018.2022 = as.numeric(EMP_2018.2022), EMP_2018.2022 = as.numeric(EMP_2018.2022), UNI_2018.2022 = as.numeric(UNI_2018.2022), EKW_2022  = as.numeric(EKW_2022)) 
+
+#making sure no NAs exist
+data_cities_lm <- drop_na(data_cities_lm)
+
+data_cities_lm
+
+
+```
+
+
+We suspect that NatWalkInd is very reliant on the Ranked variables. Let's take a closer look at what variables go into NatWalkInd to understand if we should remove these variables when testing EKW_2022 to avoid colinearity.
+
+
+```{r, warning = FALSE, results = 'hide'}
+
+#Getting rid of variables that may be collinear to other variables
+data_cities_log <- data_cities_lm %>%
+  mutate(HighWalkability = ifelse(NatWalkInd >median(NatWalkInd), 1,0 )) %>%
+  select(everything(), -NatWalkInd, -CBSA_EMP, - Shape_Length, -Shape_Area)
+
+
+#Backwards Selecting variables to be left with 15 variables for bestglm
+model3 <- glm(HighWalkability~. -D4E -EMP_2018.2022 -D4A -D3A -VHA_2018.2022 -D1C8_HLTH -D3AAO -UNI_2018.2022 -D3APO -FAI_2020 -Pct_AO0 , data = data_cities_log, family= binomial())
+
+summary(model3)
+
+```
+
+```{r, warning= FALSE}
+#saved the last 15 variables under data_cities_log2
+data_cities_log2 <- data_cities_log %>%
+  select(everything(), -D4E, -EMP_2018.2022, -D4A, -D3A, -VHA_2018.2022, -D1C8_HLTH, -D3AAO, -UNI_2018.2022, -D3APO, -FAI_2020, -Pct_AO0, -P_WrkAge)
+
+Xy_design <- model.matrix(HighWalkability ~ .+0, data_cities_log2)
+
+Xy <- data.frame(Xy_design, data_cities_log2$HighWalkability)
+
+#perform bestglm to get model variables with the lowest aic 
+model3 <- bestglm::bestglm(Xy, family= binomial, method = "backward", IC = "AIC", nvmax = 5)
+
+model3$BestModels[1,] # row of the best model 
+
+```
+
+```{r warning =FALSE }
+
+#High walkability
+
+finalmodel <- glm(HighWalkability ~.  - TotPop - HH -CountHU -D2A_JPHH -D3AMM  -R_PCTLOWWAGE -MCD_2018.2022 -EKW_2022 -UNS_2018.2022 -TRV_2018.2022 -D3B -D2A_Ranked ,data = data_cities_log2, family =binomial())
+
+finalmodel1 <- glm(HighWalkability ~.  - TotPop - HH -CountHU -D2A_JPHH -D3AMM  -R_PCTLOWWAGE -MCD_2018.2022 -EKW_2022 -UNS_2018.2022 -TRV_2018.2022 -D3B ,data = data_cities_log2, family =binomial())
+
+#Here we see that the ranked variables are all closely related as removing one of the variables leads to high significance.
+summary(finalmodel)
+summary(finalmodel1)
+
+```
+
+Based on this model, if we utilize the model with the lowest Criterion/AIC (AIC = 8), the variables D2A_Ranked, D2B_Ranked, D3B_Ranked, and D4A_Ranked all play a role in NatWalkInd. We removed D2A_Ranked in order to see the actual p values without colinearity interference of these ranked variables. When including all ranked variables, the p-values shot up to .977 although the AIC was estimated at 10. When removing one of the ranked variables (D2A_Ranked), the p-values shot down to <.01 and had an AIC of 1232.6. This analysis helps suggest to not use NatWalkInd and these ranked variables when testing EKW_2022, as they are collinear and will not pass the independence assumption. Further, we think that using the ranked variables for analysis may be more insightful since they each are metrics for different things. Thus, we will continue this analysis with linear modeling and backwards selection for our EKW_2022 variable. 
+
+
+# Linear Modeling And Backwards Selection
+
+
+When performing backwards selection on EKW_2022, we wanted to try including NatWalkInd to see how it would perform and the effects there. 
+
+```{r}
+
+#Run the model and perform backwards selection
+model1 <- lm(EKW_2022~ .-CBSA_EMP -D4A_Ranked -D3APO -D4E -Shape_Area -Shape_Length -D4A -CountHU -HH -R_PCTLOWWAGE -D1C8_HLTH -D3B_Ranked -D2B_Ranked -D2A_JPHH -Pct_AO0 -D2A_Ranked, data = data_cities_lm)
+
+summary(model1)  
+
+
+```
+
+Here we can see the Ranked variables appeared not significant, again pointing to collinearity between the Ranked variables and NatWalkInd.
+
+Instead of including NatWalkInd, we decided to allow room for the Ranked variables to see their effects on our response variable (EKW_2022) since each of these variables may differ slightly. 
+
+```{r}
+model_natwalk<- lm(EKW_2022~ . -NatWalkInd -CBSA_EMP -D3APO -Shape_Area -CountHU -HH -D1C8_HLTH -D4E -Pct_AO0 - D2A_JPHH -Shape_Length -D3B -D3AAO  , data = data_cities_lm)
+
+summary(model_natwalk)
+
+```
+Our Findings: 
+Here we can see that the FAI_2020 variable, UNI_2018.2022 variable, UNS_2018.2022, MCD_2018.2022, and the VHA_2018.2022 are all significant to National Walkability Index, indicating that food insecurity and healthcare accessibility are likely related to walkability. The model suggests that food insecurity decreases at a rate of 1.773% as walkability increases. It also suggests that the uninsured rate increases at a rate of 2.4% while the rate of those who are covered by VA Health Care decreases at a rate of 7.29% as walkability increases. Assumptions of this model are below in the appendix.
+
+
+# LASSO
+
+```{r}
+Y <- data_cities_lm$EKW_2022
+X <- model.matrix(EKW_2022 ~. -NatWalkInd, data = data_cities_lm)[, -1]
+```
+
+```{r, results='hide'}
+fit.fl.lambda <- glmnet(X, Y, alpha=1, lambda = 0.05)
+names(fit.fl.lambda)
+```
+
+```{r results="hide"}
+tmp_coeffs <- fit.fl.lambda$beta
+fit.fl.lambda$df    
+```
+
+```{r, results= "hide"}
+coef(fit.fl.lambda)
+``` 
+
+```{r}
+Y <- data_cities_lm$EKW_2022
+X <- model.matrix(EKW_2022~. - NatWalkInd, data=data_cities_lm)[, -1]
+set.seed(10)
+fit.fl.cv <- cv.glmnet(X, Y, alpha=1, nfolds=25)  
+plot(fit.fl.cv)
+```
+
+Shows that we need a very small lambda, which we then went back up to adjust.
+
+
+
+### Build the lasso model
+
+```{r, results= "hide"}
+
+coef.1se <- coef(fit.fl.cv, s="lambda.1se")  
+coef.1se <- coef.1se[which(coef.1se !=0),]
+var.1se <- rownames(as.matrix(coef.1se))[-1] 
+lm.input <- as.formula(paste("EKW_2022", "~", paste(var.1se, collapse = "+"))) 
+lm.input
+```
+
+```{r}
+fit.1se.lm <- lm(lm.input, data=data_cities_lm)
+summary(fit.1se.lm) 
+```
+
+The ranked variables are able to come back into the model due to NatWalkInd being gone. The adjusted R squared is also a bit higher in this model, signaling that by taking out the index, we can actually improve the model.
+
+Another takeaway is that food insecurity decreases in significance and there is a removal of uninsured residents and uninsured residents rate from the model. VHA rate still remains in the model with a high negative coefficient suggesting that there may be a strong relationship between it and walkability. This is interesting as it brings insight on which factors may connect more closely with walkability.
+
+
+# Spatial Analysis
+
+Let's do some spatial analysis to see how the variables look spatially:
+
+```{r results="hide"}
+
+#Downloading the Census Tract
+tract <- st_read("~/humananalytics/final_project/Chicago_CensusTracts2010/CensusTractsTIGER2010.shp") %>% st_transform(crs = 4326)
+tract
+
+
+#Merging tract and data_cities
+
+tract$GEOID10 <- as.numeric(tract$GEOID10)
+
+data_cities_sf <- merge(data_cities, tract, by.x="NEWGEOID10", by.y = "GEOID10")
+
+data_cities_sf
+
+
+
+data_cities_sf <- st_as_sf(data_cities_sf)
+
+```
+
+
+```{r}
+#Merging Tract and data_cities, and creating Spatial Data
+tract$GEOID10 <- as.numeric(tract$GEOID10)
+data_cities_sf <- merge(data_cities, tract, by.x="NEWGEOID10", by.y = "GEOID10")
+data_cities_sf <- st_as_sf(data_cities_sf)
+```
+
+## Spatial Maps
+
+```{r include= FALSE}
+# We need to specify the region we want to plot longitudes and latitudes of Chicago
+API_key <- "e1f47dec-6863-4a61-b2cd-e1a5185301b4"
+register_stadiamaps(API_key)
+map <- get_stadiamap(c(left = -87.9401, bottom = 41.6443, 
+                       right = -87.5239, top = 42.0230), zoom = 12,
+                     maptype = "stamen_toner_lite")
+ggmap(map)
+```
+
+### With NatWalkInd
+
+
+```{r}
+# Plotting with mapview
+mapview(data_cities_sf, zcol = "NatWalkInd")
+```
+
+Walkability varies across the city, with medium to low scores in darker green areas suggesting average pedestrian conditions, while lighter green and yellow areas indicate higher walkability. Higher walkability is noted in central and northern parts of Chicago, likely reflecting the better pedestrian infrastructure in urban and densely populated areas.
+
+### With EKW_2022
+```{r }
+mapview(data_cities_sf, zcol = "EKW_2022")
+```
+
+The maps with EKW_2022 highlights high walkability in central and northern regions, indicative of dense urban areas. The second map, EKW_2022, displays a wider distribution of walkability, possibly due to infrastructure enhancements or improved data collection from the year 2021 to 2022. From now on, we only use EKW_2022 because of the more recent data and because of aforementioned findings.
+
+### Food & Healthcare Access
+```{r}
+# Plotting
+data_cities_sf$FAI_2020 <- as.numeric(as.character(data_cities_sf$FAI_2020))
+ggplot(data = data_cities_sf) +
+  geom_sf(aes(fill = FAI_2020), color = NA) + 
+  scale_fill_viridis_c(option = "magma", name = "Food Insecurity") +
+  labs(title = "Map of Food Insecurity in Chicago",
+       subtitle = "Based on FAI_2020",
+       caption = "Source: Chicago Health Atlas Data") +
+  theme_minimal()
+```
+
+The map displays varying levels of food insecurity across Chicago, based on the Food Insecurity Index (FAI) for 2020. Areas shaded in darker purple, particularly concentrated in the central and northern regions of the city, indicate lower rates of food insecurity. Conversely, regions depicted in lighter colors, notably in the southern parts of the city, show relatively higher levels of food insecurity, with scores closer to 50. This geographic distribution suggests significant disparities in access to adequate food within the certain areas, likely reflecting underlying socio-economic differences across these areas.
+
+```{r}
+# Plotting
+ggplot(data = data_cities_sf) +
+  geom_sf(aes(fill = EMP_2018.2022), color = NA) +
+  labs(title = "Map Employment Insurance in Chicago",
+       subtitle = "Based on EMP_2018.2022",
+       caption = "Source: Chicago Health Atlas Data") +
+  theme_minimal()
+```
+
+
+```{r}
+# Plotting
+ggplot(data = data_cities_sf) +
+  geom_sf(aes(fill = UNS_2018.2022), color = NA) +
+  labs(title = "Map Uninsured Rate in Chicago",
+       subtitle = "Based on UNS_2018-2022",
+       caption = "Source: Chicago Health Atlas Data") +
+  theme_minimal()
+```
+
+The two maps of Chicago show different socioeconomic indicators: Employment Insurance rates and Uninsured Rates for the same period. The first map, illustrating employment insurance, uses a color gradient from light to dark blue to denote lower to higher rates of employment insurance across different neighborhoods. In contrast, the second map depicting uninsured rates also employs a blue gradient, but it indicates lower rates in darker areas, showing an inverse relationship compared to the employment insurance map. Areas with higher employment insurance might suggest a more stable economic environment which can correlate with better-maintained infrastructure and amenities, potentially enhancing walkability. Regions with higher uninsured rates might reflect economic strain, potentially diminishing walkability in these areas. Again we see an acceleration of the employment insurance rating in the north east region and a higher uninsured rating in areas away from the coast in the northwest and southern region.
+
+# Spatial Regression
+
+## Lag Model
+
+```{r include = FALSE}
+library(spdep)     
+library(spatialreg)
+neighbors <- poly2nb(data_cities_sf)
+weights <- nb2listw(neighbors, style="W", zero.policy=TRUE)
+```
+
+Let's try running a spatial lag model using the significant variables found earlier in our linear regression model (not including NatWalkInd).
+
+```{r}
+neighbors <- poly2nb(data_cities_sf)
+weights <- nb2listw(neighbors, style="W", zero.policy=TRUE)
+
+lag_model2 <- lagsarlm(EKW_2022 ~ TotPop + P_WrkAge +R_PCTLOWWAGE +D3A +D3AMM +D4A +D2A_Ranked +D2B_Ranked +D3B_Ranked +D4A_Ranked +EMP_2018.2022 +MCD_2018.2022 + UNI_2018.2022 + UNS_2018.2022 + VHA_2018.2022 + FAI_2020 + TRV_2018.2022 , data = data_cities_sf, listw = weights)
+summary(lag_model2)
+```
+
+In this model including spatial data, we can see that the Ranked variables did show up when NatWalkInd was removed. 
+
+This model suggests that food insecurity has a negative relationship with the national walkability index in 2022, meaning that as the national walkability increases by one, the food insecurity rate decreases by 1.38e-2% on average, taking into account its neighbors.  The medicaid rate and uninsured rate both have a positive linear relationships when taking into account their spatial data, on average increasing by .96e-3% and 1.63e-2% as the national walkability increases by one. This is an unexpected conclusion. Furthermore, the VHA insured rate has a negative relationship to EKW_2022, decreasing on average by .69e-3%.
+
+Interestingly, we see that the uninsured resident amount has a negative linear  relationship with the national walkability index. This could potentially be due to the spatial nature of this analysis, with the potential for future analysis to account more closely for things like population number. Additionally, it would be helpful for us to get a sense of all insurance measures in one metric, since there are clear differences in access to them.
+
+
+Lastly, let's look at the variables that are significant to EKW_2022 using backwards selection from all the possible variables.
+
+```{r}
+neighbors <- poly2nb(data_cities_sf)
+weights <- nb2listw(neighbors, style="W", zero.policy=TRUE)
+
+## performing backwards selection & removed the variable with the largest p-value at every iteration
+
+lag_model_backwards <- lagsarlm(EKW_2022 ~  HH + D3APO + D2A_Ranked + D4A_Ranked + D4A_Ranked + UNS_2018.2022 + D2B_Ranked + MCD_2018.2022 + D3B_Ranked +UNI_2018.2022 + FAI_2020 , data = data_cities_sf, listw = weights)
+summary(lag_model_backwards)
+```
+
+This model narrows down the important related variables to EKW_20222, specifically not including NatWalkInd. The model finds a good amount of variables to be significant, but most importantly variables: UNS_2018.2022, MCD_2018.2022, UNI_2018.2022, and FAI_2020. This finally suggests that food insecurity and healthcare accesibility may be related to geo-spatial walkability. Similar to seen before, food insecurity had a negative relationship with wallability as well the number of uninsured people. The rate of uninsured people and the rate of medicaid users had a positive linear relationship with walkability, again seen previously. This model is likely the best to represent the relationship between walkability and these variables as it has the lowest AIC at 5767.2 and indicates that there is a spatial relationship between these variables and their neighbors.
+
+
+## Error Model
+
+```{r}
+errorfit1 <- errorsarlm(EKW_2022 ~ NatWalkInd + D3B + TotPop + P_WrkAge + D3A + D3AAO + D3AMM + EMP_2018.2022 + MCD_2018.2022 + UNI_2018.2022 + UNS_2018.2022 + VHA_2018.2022 + FAI_2020 + TRV_2018.2022, data=data_cities_sf, listw=weights)
+summary(errorfit1)
+```
+
+
+```{r}
+
+errorfit2 <- errorsarlm(EKW_2022 ~ TotPop + P_WrkAge +R_PCTLOWWAGE +D3A +D3AMM +D4A +D2A_Ranked +D2B_Ranked +D3B_Ranked +D4A_Ranked +EMP_2018.2022 +MCD_2018.2022 + UNI_2018.2022 + UNS_2018.2022 + VHA_2018.2022 + FAI_2020 + TRV_2018.2022 , data = data_cities_sf, listw = weights)
+summary(errorfit2)
+```
+
+The results highlight several statistically significant predictors of walkability. Food insecurity specifically also shows a strong negative impact on walkability, with a significant negative coefficient. Other significant negative effects are explained by the variables Medicaid coverage, uninsured rates, and travel times. The model is highly significant overall, because of the likelihood ratio test statistic, and lambda.
+
+Given the lower AIC and the higher log likelihood of the second fit, it is statistically superior to the first model.
+
+
+# Conclusion
+
+Our study aimed to analyze and assess Chicago's walkability, particularly in relation to two significant urban challenges: food insecurity and healthcare coverage access. By examining the correlation between walkability and access to food and healthcare, we sought to contribute to the discourse on urban planning and its impact on health outcomes. Throughout the course of this analysis, we performed logistic regression, linear regression, lasso regularization, and both spatial error and lag models. 
+
+The logistic regression investigated NatWalkInd and its correlation to the ranked variables: D2A_Ranked, D2B_Ranked, D3B_Ranked, and D4A_Ranked, suggesting that NatWalkInd and the ranked variables should be used independently in future analysis. Through the linear model with backwards selection, we were able to find that there was a relationship of food insecurity and healthcare to the walkability index.
+
+Our best model was spatial lag regression, with an AIC of 5767.2, which we utilized backwards selection without NatWalkInd, considering NatWalkInd's previously identified influence. From this model, our findings indicated that food insecurity and healthcare accessibility were spatially related with the walkability. We found that as walkability increases, on average the rate of uninsured residents would increase by 0.0108% and the rate of residents insured by medicaid by .00451%. On average, as the walkability index increases, the rate of food insecurity decreases by 0.0155 and uninsured individuals by .000295 while taking into account spatial location. Although food insecurity was similar to our EDA findings, we did not expect to see a positive relationship between our uninsured rate variable and our walkability variable. 
+
+ Thus, our analysis suggests that although food insecurity is decreasing in areas with high walkability, it is important to decrease food insecurity in areas that are less walkable, like the south or inland Chicago. Food deserts (urban areas with limited access to affordable food) often overlap with regions of low walkability, exacerbating public health issues related to poor diet.
+ 
+ 
+Our analysis also gave us insight on the relationship between healthcare accessibility and walkability, indicating that rate of people who are uninsured and rely on medicaid increases as walkability increases. This is interesting as walkability does not lead to higher independent healthcare accessibility unlike what we predicted. Instead, the rate of residents covered by medicaid coverage increases, indicating that there may be higher access to government based healthcare in more walkable areas. Similarly, areas with poor walkability can limit residents' ability to reach government healthcare services, which is crucial for preventative and emergency health care.
+ 
+ This analysis could inform policy recommendations to the Chicago mayor, the Department of Planning and Development (DPD) and the CDPH, that not only improve walkability but also enhance overall urban livability, thereby improving overall lifestyle. Such improvements are pivotal in transforming urban environments into more health-supportive spaces that encourage walking and other physical activities.
+ 
+ Limitations: Some limitations of our study include that we were only able to look at Cook and Du Page county. Further, Du Page only had a few data points (5), while Cook had many (2180), leading us to not have adequate comparison. There could also be other counties in Chicago that would provide good expansion for the project. Another limitation is that we had over 140 variables to begin with, so we had to cut down initially without statistical measure to narrow in our question. Thus, there is potential that we missed out on different contributions from other available data. There are also potential for further analysis with autocorrelation and Moran’s I, that we decided not to focus on, but think would be good to continue understanding walkability in Chicago. Overall, the mass amounts of data provided useful for analysis, but also posed a limitation in needing to cut down on what we used and how we used it. 
+ 
+# Appendix {-}
+
+Put all supplementary materials in Appendix so that we do not lose focus in the main text but at the same time provide all relevant information for your reader/colleague/boss as well as **the future you** for reference!
+
+## Data dictionary {-}
+
+Data Dictionary Link: https://docs.google.com/document/d/1nbo9Qp6IDW9rJSgrV38W-hXUsyy8n0B_uqH1spD7PpA/edit?usp=sharing
+
+## Data cleaning process: {-}
+
+###Read in the data {-}
+
+Switched this line to run from my computer: walkability <- fread("EPA_SmartLocationDatabase_V3_Jan_2021_Final.csv")
+
+Same for the other: state_city <- fread("US_FIPS_Codes.csv", header = TRUE)
+
+
+```{r, results = 'hide'}
+walkability <- fread("~/humananalytics/final_project/EPA_SmartLocationDatabase_V3_Jan_2021_Final.csv", 
+                     colClasses = c('GEOID10'='character', 
+                                    'STATEFP' = 'character',
+                                    'COUNTYFP' = 'character',
+                                    'TRACTCE'= 'character'))
+state_city <- fread("~/humananalytics/final_project/US_FIPS_Codes.csv", header = TRUE)
+
+```
+
+```{r, results = "hide"}
+walkability$COUNTYFP <- str_pad(walkability$COUNTYFP, width = 3, side = "left", pad = "0")
+walkability$TRACTCE <- str_pad(walkability$TRACTCE, width = 6, side = "left", pad = "0")
+
+walkability <- walkability %>%
+  mutate(NEWGEOID10 = paste0(walkability$STATEFP, walkability$COUNTYFP, walkability$TRACTCE)) %>%
+  mutate(NEWGEOID10 = as.numeric(NEWGEOID10), COUNTYFP = as.integer(COUNTYFP), STATEFP = as.integer(STATEFP)) %>%
+  select(OBJECTID, NEWGEOID10, everything(), -GEOID10)
+
+walkability
+```
+
+
+###Formatting State_City Data Set {-}
+
+```{r}
+colnames(state_city) <- as.character(state_city[1, ])
+state_city <- state_city[-1,]
+state_city$`FIPS State` <- as.integer(state_city$`FIPS State`)
+state_city$`FIPS County` <- as.integer(state_city$`FIPS County`)
+```
+
+```{r, results='hide'}
+#Looking at the data 
+sample_n(walkability, 6)
+
+sample_n(state_city, 6)
+
+```
+
+
+
+###Clean Data: {-}
+Column CSA Name provides context of the city statistical area which we will later need to make sure we select for specifically the Chicago city. 
+```{r, results = "hide"}
+walkability <- walkability %>%
+  drop_na(CSA_Name)
+
+walkability
+```
+
+Selecting for rows that have Chicago in their CSA name:
+```{r}
+walkability <- walkability %>%
+  filter(grepl("Chicago", CSA_Name))
+
+#Checks to see that the CBSA 
+walkability <- walkability %>%
+          filter((CBSA_Name != "Ottawa, IL" )& (CBSA_Name != "Kankakee, IL") & (CBSA_Name != "Michigan City-La Porte, IN")  ) #filters out non needed cities
+
+
+unique(walkability$CBSA_Name)
+unique(walkability$CSA_Name)
+```
+
+
+```{r}
+#rename columns to make similar to other data frame (data_cities)
+state_city <- rename(state_city, STATEFP = `FIPS State`) 
+state_city <- rename(state_city, COUNTYFP = `FIPS County`)  
+
+head(state_city)
+
+```
+Joining the data_cities and walkability data set so have state and county names.
+```{r}
+data_cities <- left_join(walkability, state_city, by = c("COUNTYFP", "STATEFP"))
+```
+
+```{r}
+
+data_cities<- data_cities %>%
+  filter(State == "Illinois" & `County Name` != "De Kalb" & `County Name` != "Grundy")
+  
+unique(data_cities$`County Name`)
+unique(data_cities$State)
+unique(data_cities$CSA_Name)
+
+
+```
+
+Getting Rid of Non-Useful Columns.
+```{r}
+data_cities <- data_cities  %>%
+  select(-Ac_Water, -Ac_Total, -Ac_Unpr, -Ac_Land )
+```
+
+Do not run following code twice:
+
+```{r, results='hide'}
+data_cities <- data_cities %>%
+  select(State, `County Name`,NatWalkInd,D3B, everything())
+
+
+data_cities <- rename(data_cities,  County_Name = `County Name`)
+
+```
+
+
+
+
+
+```{r, results = "hide"}
+health_data <- read.csv("~/humananalytics/final_project/Chicago Health Atlas Data Download - Census Tracts.csv", header = TRUE)
+
+health_data <- health_data[-1,]
+
+#drop non relevant columns to our question
+health_data <- health_data %>%
+  select(everything(), -Layer, -Name, -Population )
+
+
+health_data
+```
+
+```{r}
+
+data_cities <- merge(data_cities, health_data, by.x = "NEWGEOID10", by.y = "GEOID")
+
+
+
+```
+
+
+```{r}
+data_cities <- data_cities %>%
+  select(everything(), -GEOID20, -BLKGRPCE, -CSA, -CSA_Name, -CBSA, -CBSA_Name, -CBSA_POP, -CBSA_WRK, -AutoOwn0, -AutoOwn1, -Pct_AO1, -AutoOwn2p, -Pct_AO2p, -Workers, -R_LowWageWk, -R_MedWageWk, -R_HiWageWk,  -TotEmp,  -E5_Ret, -E5_Off, -E5_Ind, -E5_Svc, -E5_Ent, -E8_Ret, -E8_off, -E8_Ind, -E8_Svc, -E8_Ent, -E8_Ed, -E8_Hlth, -E8_Pub, -E_LowWageWk, -E_MedWageWk, -E_HiWageWk, -E_PctLowWage,  -D1A, -D1B, -D1C, -D1C5_RET , -D1C5_OFF, -D1C5_IND , -D1C5_SVC, -D1C5_ENT, -D1C8_RET, -D1C8_OFF, -D1C8_IND, -D1C8_SVC, -D1C8_ENT, -D1C8_ED, -D1C8_PUB, -D1D, -D1_FLAG, -D2B_E5MIX, -D2B_E5MIXA, -D2B_E8MIX, -D2B_E8MIXA, -D2A_EPHHM, -D2C_TRPMX1,  -D2C_TRPMX2,  -D2C_TRIPEQ, -D2R_JOBPOP, -D2R_WRKEMP, -D2A_WRKEMP, -D2C_WREMLX,  -D3BAO, -D3BMM3, -D3BMM4, -D3BPO3, -D3BPO4,  -D4B025, -D4B050, -D4C, -D4D, -D5AR, -D5AE, -D5BR, -D5BE, -D5CR, -D5CRI,  -D5CE, -D5CEI, -D5DR,-D5DRI, -D5DE, -D5DEI )
+  
+```
+
+
+```{r}
+
+write.table(data_cities, file = "ChicagoWalkability.csv", sep = "," )
+
+```
+
+## Further EDA Analysis {-}
+
+
+First, we wanted to look at the D3B and D3B Ranking variables which represent Street Intersection Density. The D3B Ranked variable is essentially considering the D3B and ranking it on a scale from 0-20. We were curious about these two variables as we know that the Ranked variables contribute to NatWalkInd thanks to our data guide.
+
+Let's take a look at the distribution of the D3B_Ranked variables to see how prevalent each ranking is.  
+
+```{r}
+
+data_cities %>%
+  ggplot(aes(x = D3B_Ranked, fill = "red")) +
+  geom_bar()  +
+  labs(title = "Count of DB3_Ranked")
+
+```
+
+The bar chart of ranked D3B shows that interconnected density rankings (D3B_Ranked) are most commonly 20. Thus, we have to be careful when interpreting results with this variable, as the distribution of this ranking is very left skewed. 
+
+Next we want to look at the distribution of the National Walkability Index: 
+```{r, warning= FALSE}
+
+#data_cities %>%
+#  ggplot(aes(x = EKW_2022, fill = "red")) +
+#  geom_histogram()  +
+ # labs(title = "Count of National Walkability Index")
+```
+This histogram shows that the National Walkability Index from 2022 is normally distributed but not around the expected mean (rating of 10).  Unexpectedly, the  distribution lies mostly higher than 10, indicating decent to moderate walkability. This plot also shows that there may be a few outliers.
+
+We also wanted to compare the percent of low wage workers against the National Walkability Index, including counties. 
+
+```{r, warning =FALSE}
+data_cities %>%
+  ggplot(aes(x = EKW_2022, y = R_PCTLOWWAGE, color =County_Name)) + geom_point() + geom_smooth(method = "lm") + labs(title = "Percentage of Low Wage Workers and Walkability Index", x = "Walkability Index, 2022", y = "Percent of low wage workers in a CBG (home location), 2017")
+```
+
+
+Here we can see that there is a negative linear relationship between the two. This indicates that as the national walkability index increases, the percent of low wage workers in a CBG decreases. There is a slight difference based on counties, although there isn't much data for Du Page county compared to Cook county, and thus further analysis may not be possible between the two counties.
+
+
+Lastly, when considering walkability, we also want to explore car ownership to consider other modes of possible transportation.
+We decided to explore the Pct_AO0 variable which is the percent of households that own zero automobiles. This will give us a quick understanding of those that do have a car versus those who do not.
+
+```{r}
+
+#Looking at National Walkability Index
+data_cities %>%
+  ggplot(aes(x = NatWalkInd, y = Pct_AO0, fill = County_Name)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Percent of People With No Car Compared To National Walkability Index")
+
+
+```
+
+This graph demonstrates an interesting topic, since with Pct_AO0, we see that areas with medium walkability have less cars than expected. Surprisingly areas with high walkability own more cars than those in areas with medium to moderately good walkability. Unsurprisingly, those with low walkability also own cars. This may be interesting to promote alternative sources of transportation in the medium walkability areas because they have less cars and also help show that areas with lower walkability may need better access to essential resources, like healthcare and food.
+
+
+
+## Assumptions {-}
+
+
+Checking the Assumptions of the model (:
+```{r, results = "hide"}
+resid_panel(model1)
+```
+
+
+The assumptions linearity, normality, independence, and homoscedasticity appear to be passed. There are a few outliers shown in the qq-plot but not enough to be significant.
+
+
+## Spatial Data {-}
+
+
+Further Spatial Analysis
+```{r}
+
+neighbors <- poly2nb(data_cities_sf)
+weights <- nb2listw(neighbors, style="W", zero.policy=TRUE)
+
+lag_model1 <- lagsarlm(EKW_2022 ~ NatWalkInd + D3B + TotPop + P_WrkAge + D3A + D3AAO + D3AMM + EMP_2018.2022 + MCD_2018.2022 + UNI_2018.2022 + UNS_2018.2022 + VHA_2018.2022 + FAI_2020 + TRV_2018.2022, data = data_cities_sf, listw = weights)
+summary(lag_model1)
+
+```
+
+
+
+In Lag model 1 we took out NatWalkInd because of its collinearity to other variables to see if that will affect what variables appear as significant to EKW_2022.
